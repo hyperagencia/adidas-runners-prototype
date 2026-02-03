@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Mail } from 'lucide-react';
@@ -70,10 +71,10 @@ export default function LoginPage() {
 
       {/* Back Link */}
       <div className="mt-8">
-        <a href="/" className="text-sm text-gray-600 hover:text-black transition-colors">
-          ← Volver al inicio
-        </a>
-      </div>
+  <Link href="/" className="text-sm text-gray-600 hover:text-black transition-colors">
+    ← Volver al inicio
+  </Link>
+</div>
     </div>
   );
 }

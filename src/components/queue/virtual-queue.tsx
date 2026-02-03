@@ -21,46 +21,56 @@ export function VirtualQueue({ eventId, eventName, userId }: VirtualQueueProps) 
   const router = useRouter();
 
   useEffect(() => {
-    // Poll cada 2 segundos
-    const interval = setInterval(async () => {
-      try {
-        const res = await fetch(`/api/queue/status?eventId=${eventId}&userId=${userId}`);
-        const data = await res.json();
-        
-        setPosition(data.position);
-        setTotalInQueue(data.totalInQueue);
-        setCanProceed(data.canProceed);
-        setLoading(false);
-        
-        if (data.canProceed) {
-          // Redirigir al dashboard para reservar
-          setTimeout(() => {
-            router.push(`/dashboard?reserved=${eventId}`);
-          }, 1500);
-        }
-      } catch (error) {
-        console.error('Error polling queue:', error);
+  // Poll cada 2 segundos
+  const interval = setInterval(async () => {
+    try {
+      const res = await fetch(`/api/queue/status?eventId=${eventId}&userId=${userId}`);
+      const data = await res.json();
+      
+      setPosition(data.position);
+      setTotalInQueue(data.totalInQueue);
+      setCanProceed(data.canProceed);
+      setLoading(false);
+      
+      if (data.canProceed) {
+        // Redirigir al dashboard para reservar
+        setTimeout(() => {
+          router.push(`/dashboard?reserved=${eventId}`);
+        }, 1500);
       }
-    }, 2000);
+    } catch (error) {
+      console.error('Error polling queue:', error);
+    }
+  }, 2000);
 
-    // Primera llamada inmediata
-    fetch(`/api/queue/status?eventId=${eventId}&userId=${userId}`)
-      .then(res => res.json())
-      .then(data => {
-        setPosition(data.position);
-        setTotalInQueue(data.totalInQueue);
-        setCanProceed(data.canProceed);
-        setLoading(false);
-        
-        if (data.canProceed) {
-          setTimeout(() => {
-            router.push(`/dashboard?reserved=${eventId}`);
-          }, 1500);
-        }
-      });
+  // 🎭 DEMO: Auto-procesar la cola cada 3 segundos
+  const processInterval = setInterval(() => {
+    // Simular que personas van siendo procesadas
+    fetch(`/api/queue/process?eventId=${eventId}`, { method: 'POST' })
+      .catch(err => console.error('Error processing queue:', err));
+  }, 3000);
 
-    return () => clearInterval(interval);
-  }, [eventId, userId, router]);
+  // Primera llamada inmediata
+  fetch(`/api/queue/status?eventId=${eventId}&userId=${userId}`)
+    .then(res => res.json())
+    .then(data => {
+      setPosition(data.position);
+      setTotalInQueue(data.totalInQueue);
+      setCanProceed(data.canProceed);
+      setLoading(false);
+      
+      if (data.canProceed) {
+        setTimeout(() => {
+          router.push(`/dashboard?reserved=${eventId}`);
+        }, 1500);
+      }
+    });
+
+  return () => {
+    clearInterval(interval);
+    clearInterval(processInterval);
+  };
+}, [eventId, userId, router]);
 
   const estimatedWaitTime = position ? position * 2 : 0;
 

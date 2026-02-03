@@ -1,5 +1,4 @@
-import { kv } from '@vercel/kv';
-
+// Mock Queue Manager para demo (sin persistencia)
 export interface QueuePosition {
   userId: string;
   position: number;
@@ -14,61 +13,83 @@ export interface QueueStatus {
   estimatedWaitSeconds: number;
 }
 
+// Simulación en memoria (se resetea al refrescar)
+const queues = new Map<string, Map<string, number>>();
+const processed = new Map<string, Set<string>>();
+
 export class QueueManager {
-  private static QUEUE_KEY = 'event_queue';
-  private static ACTIVE_KEY = 'active_users';
-  private static PROCESSED_KEY = 'processed_users';
-  
-  /**
-   * Agregar usuario a la cola
-   */
+  private static getQueue(eventId: string) {
+    if (!queues.has(eventId)) {
+      queues.set(eventId, new Map());
+    }
+    return queues.get(eventId)!;
+  }
+
+  private static getProcessed(eventId: string) {
+    if (!processed.has(eventId)) {
+      processed.set(eventId, new Set());
+    }
+    return processed.get(eventId)!;
+  }
+
   static async joinQueue(userId: string, eventId: string): Promise<QueuePosition> {
-    const timestamp = Date.now();
-    const queueKey = `${this.QUEUE_KEY}:${eventId}`;
-    
-    // Agregar a sorted set con timestamp como score (FIFO)
-    await kv.zadd(queueKey, { score: timestamp, member: userId });
-    
-    // Obtener posición actual
-    const position = await kv.zrank(queueKey, userId);
-    
-    return {
-      userId,
-      position: (position || 0) + 1,
-      joinedAt: timestamp,
-      eventId
-    };
+  const timestamp = Date.now();
+  const queue = this.getQueue(eventId);
+  
+  // 🎭 DEMO: Si la cola está vacía, agregar usuarios simulados
+  if (queue.size === 0) {
+    // Agregar 15-20 usuarios fake con timestamps anteriores
+    const fakeUsersCount = Math.floor(Math.random() * 6) + 15; // 15-20 usuarios
+    for (let i = 0; i < fakeUsersCount; i++) {
+      const fakeUserId = `demo-user-${i}@fake.com`;
+      const fakeTimestamp = timestamp - ((fakeUsersCount - i) * 1000); // 1 seg de diferencia
+      queue.set(fakeUserId, fakeTimestamp);
+    }
   }
   
-  /**
-   * Obtener posición actual del usuario
-   */
+  if (!queue.has(userId)) {
+    queue.set(userId, timestamp);
+  }
+  
+  // Calcular posición
+  const sortedUsers = Array.from(queue.entries())
+    .sort((a, b) => a[1] - b[1]);
+  
+  const position = sortedUsers.findIndex(([id]) => id === userId) + 1;
+  
+  return {
+    userId,
+    position,
+    joinedAt: timestamp,
+    eventId
+  };
+}
+
   static async getPosition(userId: string, eventId: string): Promise<number> {
-    const queueKey = `${this.QUEUE_KEY}:${eventId}`;
-    const processedKey = `${this.PROCESSED_KEY}:${eventId}`;
+    const processedSet = this.getProcessed(eventId);
     
-    // Verificar si ya fue procesado
-    const isProcessed = await kv.sismember(processedKey, userId);
-    if (isProcessed) {
-      return 0; // Puede proceder
+    if (processedSet.has(userId)) {
+      return 0; // Ya procesado
     }
     
-    // Obtener posición en la cola
-    const position = await kv.zrank(queueKey, userId);
-    return position !== null ? position + 1 : -1;
+    const queue = this.getQueue(eventId);
+    if (!queue.has(userId)) {
+      return -1; // No está en la cola
+    }
+    
+    const sortedUsers = Array.from(queue.entries())
+      .sort((a, b) => a[1] - b[1]);
+    
+    return sortedUsers.findIndex(([id]) => id === userId) + 1;
   }
-  
-  /**
-   * Verificar estado completo de la cola para un usuario
-   */
+
   static async getQueueStatus(userId: string, eventId: string): Promise<QueueStatus> {
     const position = await this.getPosition(userId, eventId);
     const total = await this.getTotalInQueue(eventId);
     
-    // Los primeros 10 en la cola pueden proceder
+    // Los primeros 10 pueden proceder
     const canProceed = position <= 10 && position > 0;
     
-    // Marcar como procesado si puede proceder
     if (canProceed) {
       await this.markAsProcessed(userId, eventId);
     }
@@ -80,62 +101,48 @@ export class QueueManager {
       estimatedWaitSeconds: position > 0 ? position * 2 : 0
     };
   }
-  
-  /**
-   * Marcar usuario como procesado (ya puede acceder)
-   */
+
   static async markAsProcessed(userId: string, eventId: string): Promise<void> {
-    const processedKey = `${this.PROCESSED_KEY}:${eventId}`;
-    await kv.sadd(processedKey, userId);
+    const processedSet = this.getProcessed(eventId);
+    processedSet.add(userId);
     
-    // Remover de la cola
-    const queueKey = `${this.QUEUE_KEY}:${eventId}`;
-    await kv.zrem(queueKey, userId);
+    const queue = this.getQueue(eventId);
+    queue.delete(userId);
   }
-  
-  /**
-   * Procesar cola (permitir entrar a los siguientes N usuarios)
-   */
-  static async processQueue(eventId: string, slots: number = 10): Promise<string[]> {
-    const queueKey = `${this.QUEUE_KEY}:${eventId}`;
-    const processedKey = `${this.PROCESSED_KEY}:${eventId}`;
-    
-    // Obtener primeros N usuarios
-    const users = await kv.zrange(queueKey, 0, slots - 1);
-    
-    // Marcarlos como procesados
-    if (users.length > 0) {
-      await kv.sadd(processedKey, ...users);
-      await kv.zrem(queueKey, ...users);
-    }
-    
-    return users as string[];
-  }
-  
-  /**
-   * Obtener total de usuarios en cola
-   */
+
   static async getTotalInQueue(eventId: string): Promise<number> {
-    const queueKey = `${this.QUEUE_KEY}:${eventId}`;
-    return (await kv.zcard(queueKey)) || 0;
+    const queue = this.getQueue(eventId);
+    return queue.size;
   }
-  
-  /**
-   * Limpiar cola de un evento
-   */
+
   static async clearQueue(eventId: string): Promise<void> {
-    const queueKey = `${this.QUEUE_KEY}:${eventId}`;
-    const processedKey = `${this.PROCESSED_KEY}:${eventId}`;
-    await kv.del(queueKey);
-    await kv.del(processedKey);
+    queues.delete(eventId);
+    processed.delete(eventId);
   }
-  
-  /**
-   * Verificar si un usuario está en la cola
-   */
+
   static async isInQueue(userId: string, eventId: string): Promise<boolean> {
-    const queueKey = `${this.QUEUE_KEY}:${eventId}`;
-    const score = await kv.zscore(queueKey, userId);
-    return score !== null;
+    const queue = this.getQueue(eventId);
+    return queue.has(userId);
   }
+  static async processQueue(eventId: string, slots: number = 3): Promise<string[]> {
+  const queue = this.getQueue(eventId);
+  const processedSet = this.getProcessed(eventId);
+  
+  // Obtener primeros N usuarios
+  const sortedUsers = Array.from(queue.entries())
+    .sort((a, b) => a[1] - b[1])
+    .slice(0, slots)
+    .map(([userId]) => userId);
+  
+  // Solo procesar usuarios fake para la demo
+  const fakeUsers = sortedUsers.filter(id => id.startsWith('demo-user-'));
+  
+  // Marcarlos como procesados y removerlos
+  fakeUsers.forEach(userId => {
+    processedSet.add(userId);
+    queue.delete(userId);
+  });
+  
+  return fakeUsers;
+}
 }
